@@ -1,5 +1,8 @@
-# data / outputs
-data/
+# data: keep folder, ignore contents
+data/*
+!data/README.md
+
+# reports outputs
 reports/_outputs/
 
 # python
