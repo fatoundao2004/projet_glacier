@@ -3,6 +3,7 @@ pandas
 scikit-learn
 matplotlib
 python-dotenv
+seaborn
 
 geopandas
 pyogrio

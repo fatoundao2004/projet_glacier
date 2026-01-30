@@ -1,0 +1,31 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{microtype}
+
+\title{Projet : Prédire l'évolution des glaciers}
+\author{Fatou Ndao XXXXXXX \and Mohamed Atmani 20218934 \and Pierre Emery 20278920}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section*{But du projet}
+Construire un modèle qui prédit l'évolution d'un glacier pour un horizon de temps donné à partir de ses observations passées. Concrètement, nous viserons quelque chose de relativement simple comme le changement d'aire par exemple du polygone qui représente l'outline du glacier.
+
+\section*{Pourquoi ce projet}
+Les glaciers sont des indicateurs sensibles des changements climatiques, et comprendre (ou anticiper) leur évolution est important pour les impacts hydrologiques, écologiques et socioéconomiques.
+De plus, le projet est aussi formateur et intéressant d'un point de vue apprentissage automatique. Les données sont à la fois géographiques et temporelles, avec des observations irrégulières et des sources d'incertitude (qualité variable des outlines), ce qui rend la généralisation non-triviale.
+
+\section*{Jeu de données choisis et justification}
+Nous utiliserons GLIMS Glacier Database, Version 1 (NSIDC-0272).
+GLIMS fournit des outlines datés pour de nombreux glaciers, ce qui permet de construire des paires temporelles et ce qui permet aussi de séparer par glaciers pour s'assurer d'éviter d'avoir du dataleakage.
+Nous voudrions aussi implémenter peut-être des méthodes d'apprentissage profond sur des images satelittes mais ne sommes pas sur comment s'y prendre puisqu'on ne voudrait pas passer toute la session à labeliser des données.
+Pour les données satelittes nous nous intéressions au images prises par Sentinel-2.
+
+
+
+\vspace{0.8em}
+\noindent\textbf{Lien dataset (référence) :} \url{https://nsidc.org/data/nsidc-0272/versions/1}\\
+\url{https://dataspace.copernicus.eu/data-collections/copernicus-sentinel-data/sentinel-2}
+\end{document}
