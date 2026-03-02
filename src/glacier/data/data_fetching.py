@@ -10,6 +10,7 @@ import pyproj
 import stackstac
 import rioxarray
 import pandas as pd
+import time, random
 
 
 BASE_URL = "https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0272_GLIMS_v1/"
@@ -151,21 +152,31 @@ def bbox_to_projected_bounds(bbox, epsg):
     return (min(minx, maxx), min(miny, maxy), max(minx, maxx), max(miny, maxy))
 
 
-def search_items(bbox, start_date, end_date, max_cloud=40, limit=50):
-    catalog = pystac_client.Client.open(STAC_URL)
-    search = catalog.search(
-        collections=[COLLECTION],
-        bbox=list(bbox),
-        datetime=f"{start_date}/{end_date}",
-        query={"eo:cloud_cover": {"lt": max_cloud}},
-        limit=limit,
-    )
-    items = list(search.items())
+def search_items(bbox, start_date, end_date, max_cloud=60, limit=15, retries=6):
+    last_err = None
+    for k in range(retries):
+        try:
+            catalog = pystac_client.Client.open(STAC_URL)
+            search = catalog.search(
+                collections=[COLLECTION],
+                bbox=list(bbox),
+                datetime=f"{start_date}/{end_date}",
+                query={"eo:cloud_cover": {"lt": max_cloud}},
+                limit=limit,
+            )
+            items = list(search.items())
+            items.sort(key=lambda it: it.properties.get("eo:cloud_cover", 1e9))
+            return items
+        except Exception as e:
+            last_err = e
+            time.sleep((2 ** k) + random.random())  # 1s,2s,4s...
+    raise last_err
 
-    # sort by cloud cover if present
-    items.sort(key=lambda it: it.properties.get("eo:cloud_cover", 1e9))
-    return items
-
+def adaptive_buffer_deg(geom, k=0.5, min_buf=0.005, max_buf=0.02):
+    minx, miny, maxx, maxy = geom.bounds
+    max_dim = max(maxx - minx, maxy - miny)
+    buf = k * max_dim
+    return max(min_buf, min(max_buf, buf))
 
 def build_requests(glaciers_gdf, out_root: Path, split_map, buffer_deg=0.02):
     """
@@ -182,8 +193,8 @@ def build_requests(glaciers_gdf, out_root: Path, split_map, buffer_deg=0.02):
 
         y = int(r["year_img"])  # <-- une seule année par glacier
 
-        minx, miny, maxx, maxy = r["geometry"].bounds
-        bbox = (minx - buffer_deg, miny - buffer_deg, maxx + buffer_deg, maxy + buffer_deg)
+        buf = adaptive_buffer_deg(r["geometry"])
+        bbox = (minx-buf, miny-buf, maxx+buf, maxy+buf)
 
         out_path = out_root / "composites" / split / reg / f"{r['glac_id']}_{y}_summer.tif"
         rows.append({
@@ -303,3 +314,4 @@ def run_fetch(
         })
 
     return pd.DataFrame(statuses)
+
