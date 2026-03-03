@@ -178,10 +178,9 @@ def adaptive_buffer_deg(geom, k=0.5, min_buf=0.005, max_buf=0.02):
     buf = k * max_dim
     return max(min_buf, min(max_buf, buf))
 
-def build_requests(glaciers_gdf, out_root: Path, split_map, buffer_deg=0.02):
+def build_requests(glaciers_gdf, out_root: Path, k=0.5, min_buf=0.005, max_buf=0.02):
     """
-    glaciers_gdf must contain: glac_id, region, geometry (EPSG:4326)
-    split_map: dict region -> "train"/"test"/"val"
+    glaciers_gdf must contain: glac_id, region, geometry (EPSG:4326), year_img
     out_root: .../data/sentinel2
     """
     out_root = Path(out_root)
@@ -189,24 +188,26 @@ def build_requests(glaciers_gdf, out_root: Path, split_map, buffer_deg=0.02):
 
     for _, r in glaciers_gdf.iterrows():
         reg = r["region"]
-        split = split_map.get(reg, "train")
+        glac_id = r["glac_id"]
+        y = int(r["year_img"])
 
-        y = int(r["year_img"])  # <-- une seule année par glacier
+        minx, miny, maxx, maxy = r["geometry"].bounds
+        buf = adaptive_buffer_deg(r["geometry"], k=k, min_buf=min_buf, max_buf=max_buf)
 
-        buf = adaptive_buffer_deg(r["geometry"])
-        bbox = (minx-buf, miny-buf, maxx+buf, maxy+buf)
+        bbox = (minx - buf, miny - buf, maxx + buf, maxy + buf)
 
-        out_path = out_root / "composites" / split / reg / f"{r['glac_id']}_{y}_summer.tif"
+        out_path = out_root / "composites" / reg / f"{glac_id}_{y}_summer.tif"
+
         rows.append({
-            "glac_id": r["glac_id"],
+            "glac_id": glac_id,
             "region": reg,
-            "split": split,
             "year": y,
             "bbox_minlon": bbox[0],
             "bbox_minlat": bbox[1],
             "bbox_maxlon": bbox[2],
             "bbox_maxlat": bbox[3],
             "out_path": str(out_path),
+            "buffer_deg": buf,   # utile pour debug
         })
 
     return pd.DataFrame(rows)
@@ -219,9 +220,9 @@ def fetch_composite(
     out_path: Path,
     bands=("blue", "green", "red", "nir"),
     resolution=10,
-    max_cloud=40,
-    limit=50,
-    reducer="median",  # "median" or "first"
+    max_cloud=60,
+    limit=15,
+    reducer="first",  # "median" or "first"
 ):
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -268,9 +269,9 @@ def run_fetch(
     months=(6, 7, 8, 9),
     bands=("blue", "green", "red", "nir"),
     resolution=10,
-    max_cloud=40,
-    limit=50,
-    reducer="median",
+    max_cloud=60,
+    limit=15,
+    reducer="first",
 ):
     """
     Loop over requests and fetch composites. Returns status df.
@@ -308,10 +309,109 @@ def run_fetch(
         statuses.append({
             "glac_id": row["glac_id"],
             "region": row["region"],
-            "split": row["split"],
             "year": y,
             **meta,
         })
 
     return pd.DataFrame(statuses)
 
+def year_from_filename(path: str | Path) -> int:
+    """
+    Extract year from filenames like: <glac_id>_2019_summer.tif
+    Returns an int year.
+    """
+    p = Path(path)
+    m = re.search(r"_(\d{4})_summer$", p.stem)
+    if not m:
+        raise ValueError(f"Could not parse year from filename: {p.name}")
+    return int(m.group(1))
+
+
+def glims_mask_for_composite(
+    tif_path: str | Path,
+    glims_gdf: gpd.GeoDataFrame,
+    area_min: float = 0.05,
+) -> tuple[np.ndarray, int, gpd.GeoDataFrame]:
+    """
+    Build a binary mask aligned with a Sentinel-2 composite GeoTIFF.
+
+    Steps:
+    - Read GeoTIFF to get CRS, bounds, transform, shape.
+    - Parse target year from filename (..._<year>_summer.tif).
+    - Reproject GLIMS to image CRS.
+    - Select polygons intersecting the image footprint.
+    - Optionally filter by area_min.
+    - For each glac_id, keep the outline whose src_date_dt year is closest to year_img.
+    - Rasterize to a (H, W) uint8 mask where glacier=1, background=0.
+
+    Returns:
+      mask: np.ndarray (H, W) dtype uint8
+      year_img: int
+      inter_one: GeoDataFrame of selected outlines (one per glac_id)
+    """
+    tif_path = Path(tif_path)
+    year_img = year_from_filename(tif_path)
+
+    da = rxr.open_rasterio(tif_path)  # (band, y, x)
+    img_crs = da.rio.crs
+    if img_crs is None:
+        raise ValueError(f"GeoTIFF has no CRS: {tif_path}")
+
+    transform = da.rio.transform()
+    H, W = da.rio.height, da.rio.width
+    minx, miny, maxx, maxy = da.rio.bounds()
+    patch_geom = box(minx, miny, maxx, maxy)
+
+    gl = glims_gdf.copy()
+
+    # Ensure GLIMS has CRS and required columns
+    if gl.crs is None:
+        gl = gl.set_crs(4326)
+
+    if "src_date_dt" not in gl.columns:
+        raise ValueError("glims_gdf must contain 'src_date_dt' (datetime) column.")
+
+    if "glac_id" not in gl.columns:
+        raise ValueError("glims_gdf must contain 'glac_id' column.")
+
+    gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
+    gl = gl.to_crs(img_crs)
+
+    # Intersect with patch footprint
+    inter = gl[gl.intersects(patch_geom)].copy()
+
+    if len(inter) == 0:
+        # No outlines intersect; return empty mask
+        return np.zeros((H, W), dtype=np.uint8), year_img, inter
+
+    if area_min is not None and "area" in inter.columns:
+        inter = inter[inter["area"] >= area_min].copy()
+
+    if len(inter) == 0:
+        return np.zeros((H, W), dtype=np.uint8), year_img, inter
+
+    # One outline per glacier: closest year
+    inter["src_year"] = inter["src_date_dt"].dt.year
+    inter["gap"] = (inter["src_year"] - year_img).abs()
+
+    inter_one = (
+        inter.sort_values(["glac_id", "gap"])
+        .drop_duplicates("glac_id", keep="first")
+        .copy()
+    )
+
+    shapes = [
+        (geom, 1)
+        for geom in inter_one.geometry
+        if geom is not None and not geom.is_empty
+    ]
+
+    mask = rasterize(
+        shapes=shapes,
+        out_shape=(H, W),
+        transform=transform,
+        fill=0,
+        dtype=np.uint8,
+    )
+
+    return mask, year_img, inter_one
