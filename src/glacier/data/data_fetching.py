@@ -279,8 +279,16 @@ def run_fetch(
     statuses = []
     for _, row in requests_df.iterrows():
         y = int(row["year"])
-        start_date = f"{y}-{months[0]:02d}-01"
-        end_date = f"{y}-{months[-1]:02d}-30"
+        region = row["region"]
+
+        # mois par région (simple)
+        if region == "andes":
+            months_use = (1, 2, 3)      # été austral (simple, sans wrap)
+        else:
+            months_use = (6, 7, 8, 9)   # été boréal
+
+        start_date = f"{y}-{months_use[0]:02d}-01"
+        end_date   = f"{y}-{months_use[-1]:02d}-30"
 
         bbox = (
             float(row["bbox_minlon"]),
