@@ -1,0 +1,72 @@
+\documentclass[10pt]{article}
+
+% Marges et dimensions en picas
+\usepackage[left=9pc,textwidth=33pc,textheight=54pc]{geometry}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{setspace}
+\usepackage[hidelinks]{hyperref}
+\setstretch{1.1}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5.5pt}
+
+% Titres de premier niveau : 12pt, gras
+\titleformat{\section}{\bfseries\fontsize{12}{13}\selectfont}{\thesection}{1em}{}
+
+% Titres de niveau inférieur : 10pt, gras
+\titleformat{\subsection}{\bfseries\fontsize{10}{11}\selectfont}{\thesubsection}{1em}{}
+
+% Espacement autour des titres
+\titlespacing*{\section}{0pt}{11pt}{5.5pt}
+\titlespacing*{\subsection}{0pt}{11pt}{5.5pt}
+\usepackage{hyperref}
+
+\title{Méthodes et résultats préliminaires}
+
+\author{
+\href{mailto:fatou.ndao@umontreal.ca}{Fatou Ndao 20235568 }
+\and
+\href{mailto:mohamed.atmani@umontreal.ca}{Mohamed Atmani 20218934}
+\and
+\href{mailto:pierre.emery@umontreal.ca}{Pierre Emery 20278920}
+}
+
+\date{04 Mars 2026 (Remise Tardive)}
+
+\begin{document}
+
+\maketitle
+
+\section*{Changement de plan : de la prédiction à la segmentation}
+Notre plan initial était de prédire l'évolution future des contours/surfaces glaciaires à partir d'images Sentinel-2 et d'outlines historiques GLIMS. Après une exploration concrète des données, nous avons pivoté vers une tâche plus réaliste et mieux définie : la segmentation (délimitation du glacier sur une image), qui constitue aussi un prérequis pour toute prédiction temporelle fiable.
+
+Ce changement de plan s'explique par des contraintes de supervision et de temporalité. La prédiction nécessiterait, pour chaque glacier, des paires d'images Sentinel-2 à $t$ et $t+\Delta$ accompagnées d'annotations (ou outlines) GLIMS suffisamment proches de ces dates pour superviser correctement les changements. Or, les annotations GLIMS sont irrégulières et ne s'alignent pas systématiquement avec les dates d'observation, et la période de scènes Sentinel-2 exploitables dans notre pipeline actuel est relativement courte (p.\ ex. 2019--2024). Sur un intervalle aussi bref, les changements de contours sont parfois faibles à la résolution de Sentinel-2 (10 m/pixel), ce qui rend l'apprentissage d'une dynamique temporelle fragile, surtout sans segmentation robuste à chaque date. Nous visons donc maintenant à construire un jeu de données propre et à entraîner un modèle de segmentation supervisé par GLIMS, puis à évaluer la capacité de généralisation à d'autres régions.
+
+\section*{Méthodes développées jusqu'à présent et défis observés}
+À ce stade, nous n'avons pas encore entraîné de modèle de référence et n'avons donc pas de résultats préliminaires au sens de métriques de segmentation. Nos avancées portent sur la construction d'un pipeline reproductible et sur le défi central du projet : le contrôle de qualité des images satellites (nuages, ombres, neige) ainsi que la fiabilité de la supervision.
+
+\subsection*{Préparation du jeu de données}
+Nous avons mis en place un pipeline automatisé pour : (i) récupérer les données GLIMS (utilisées comme outlines pour la supervision), (ii) filtrer les glaciers selon des critères de faisabilité (géométrie valide, région ciblée, disponibilité temporelle), puis (iii) requêter et télécharger des scènes Sentinel-2 couvrant une zone d'intérêt autour de l'outline (bbox).
+Un défi observé dès cette étape est que, même après filtrage, une fraction importante des scènes récupérées est inutilisable (scènes majoritairement nuageuses) ou difficilement interprétable (ombres topographiques marquées, neige saisonnière recouvrant la zone).
+Dans l'optique de superviser une segmentation, nous superposons les outlines GLIMS sur les images Sentinel-2 pour vérifier la cohérence et préparer la génération des labels. Cette supervision demeure toutefois imparfaite : les outlines GLIMS ne coïncident pas toujours avec la date exacte de l'image, ce qui introduit du bruit de label (décalage temporel, imprécisions géométriques). Dans notre protocole actuel, nous ne conservons que les outlines dont la date est à moins de trois ans de l'image satellite correspondante. La prochaine étape technique immédiate (en cours) est la rasterisation des polygones GLIMS en masques alignés sur la même grille que Sentinel-2 (même projection, résolution et emprise), afin d'obtenir des paires (image, masque) directement utilisables pour l'entraînement.
+
+\subsection*{Contrôle de qualité : masques, sélection temporelle et limites du compositing}
+L'exploration a montré que la variabilité d'apparence est très élevée (illumination, saison, glaciers couverts de débris) et que deux phénomènes dominent la qualité : nuages/ombres et neige saisonnière. Même lorsque la scène est peu nuageuse, la neige peut recouvrir largement le relief et rendre la frontière glaciaire difficile à distinguer, ce qui entraîne des contours ambigus et des risques de faux positifs. De plus, nuages et neige présentent souvent des signatures visuelles proches (zones très claires), ce qui complique la détection automatique.
+
+Pour objectiver ces problèmes, nous avons développé des masques et des indicateurs (fractions/scores dans la bbox) pour quantifier : (i) nuages, (ii) ombres (nuages ou relief), et (iii) neige saisonnière. Ces mesures nous permettent d'analyser, par région, quelles périodes et quelles scènes offrent le moins de bruit, afin de privilégier des acquisitions ``propres''. En parallèle, nous testons une stratégie de composite médian sur une fenêtre temporelle choisie pour stabiliser l'apparence. Nous constatons toutefois que cette approche n'est pas robuste dans tous les cas : si la majorité des acquisitions sont dominées par la neige ou les nuages, le composite peut lisser les frontières et dégrader le signal utile. Nous comptons donc l'utiliser de manière prudente et comparer avec des alternatives (p.\ ex. sélection de la meilleure scène dans une fenêtre courte).
+
+\section*{Prochaines étapes (semaines à venir)}
+\begin{enumerate}
+    \item \textbf{Finalisation du jeu de données.}
+    Nous privilégierons un plus petit nombre d'images de haute qualité (selon les scores nuage/neige/ombre) plutôt que le volume brut. Dans la semaine qui suit, notre objectif est de figer un dataset constitué de scènes (ou composites) de qualité appariées à (i) un masque de pixels non fiables et (ii) un label dérivé de GLIMS (outline rasterisé).
+
+    \item \textbf{Augmentation de données et split entraînement/validation/test.}
+    Pour compenser le faible nombre de scènes ``propres'', nous appliquerons des augmentations géométriques simples (rotations, flips). Nous fixerons également un schéma de split visant à évaluer la généralisation : nos données actuelles proviennent du Caucase, des Alpes et des Andes. Nous envisageons d'entraîner et valider principalement sur une région (p.\ ex. Caucase), puis de tester sur les Alpes (conditions plus proches) et sur les Andes (conditions plus différentes) pour étudier la capacité de généraliser à d'autres chaînes de montagnes.
+
+    \item \textbf{Entraînement d'un modèle de segmentation.}
+    Nous entraînerons un réseau de neurones convolutionnel, avec U-Net comme architecture de référence. L'évaluation se fera via IoU/Dice, complétée par une analyse qualitative des échecs (neige, ombres, débris, frontières ambiguës).
+\end{enumerate}
+
+\end{document}
+
+
