@@ -235,17 +235,14 @@ def deduplicate_by_iou(
  
 def select_most_recent_outline(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Pour chaque glacier (glac_id), garde uniquement l'outline le plus récent.
-    Première passe de déduplication (par identifiant) avant la déduplication
-    géométrique.
+    Pour chaque glacier (glac_id), garde tous les outlines de la date
+    la plus récente (un glacier peut avoir plusieurs polygones à la même date).
     """
     g = gdf.copy()
     g = g[g["src_date_dt"].notna()].copy()
-    g = (
-        g.sort_values("src_date_dt", ascending=False)
-         .drop_duplicates("glac_id", keep="first")
-    )
-    return g.reset_index(drop=True)
+    g["max_date"] = g.groupby("glac_id")["src_date_dt"].transform("max")
+    g = g[g["src_date_dt"] == g["max_date"]].copy()
+    return g.drop(columns=["max_date"]).reset_index(drop=True)
  
  
 def clean_glims_for_masks(

@@ -313,27 +313,30 @@ def run_fetch(
  
  
  
-def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
+def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=None):
     """
     Build a binary glacier mask aligned with a Sentinel-2 composite GeoTIFF.
- 
+
     The function:
     - reads the composite GeoTIFF,
     - extracts the image year from the filename,
     - keeps all GLIMS outlines intersecting the patch extent,
-    - filters outlines whose year is close enough to the image year,
+    - for each glac_id, keeps only the outlines closest to the image year
+      and dissolves them (a single glac_id can have multiple polygons),
+    - optionally filters by max_gap_years,
     - clips them to the patch extent,
     - rasterizes them into a binary mask where glacier=1 and background=0.
- 
+
     Parameters
     ----------
     tif_path : str or Path
-        Path to a composite file named like <glac_id>_<year>_summer.tif
+        Path to a composite file named like <glac_id>_<year>_topk.tif
     glims_gdf : GeoDataFrame
         GLIMS outlines with at least columns: glac_id, src_date_dt, geometry
-    max_gap_years : int
-        Maximum allowed gap in years between the image year and a GLIMS outline year
- 
+    max_gap_years : int or None
+        Maximum allowed gap in years between the image year and a GLIMS
+        outline year. None = no filter (keep all).
+
     Returns
     -------
     mask : np.ndarray
@@ -344,44 +347,46 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         All GLIMS outlines used to create the mask
     """
     tif_path = Path(tif_path)
- 
+
     year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
- 
+
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
     transform = da.rio.transform()
     H, W = da.rio.height, da.rio.width
     patch_geom = box(*da.rio.bounds())
- 
+
     gl = glims_gdf.copy()
     if gl.crs is None:
         gl = gl.set_crs(4326)
- 
+
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
     gl = gl.to_crs(img_crs)
- 
+
     # garder tous les outlines qui intersectent le patch
     inter = gl[gl.intersects(patch_geom)].copy()
- 
-    # pour chaque glacier, ne garder que l'outline le plus proche de l'année image
+
+    # pour chaque glacier, garder les outlines les plus proches de l'année image
+    # puis fusionner toutes les géométries (un même glac_id peut avoir plusieurs polygones)
     inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
-    inter = (
-        inter.sort_values(["glac_id", "gap", "src_date_dt"])
-             .drop_duplicates("glac_id", keep="first")
-    )
+    inter["best_gap"] = inter.groupby("glac_id")["gap"].transform("min")
+    inter = inter[inter["gap"] == inter["best_gap"]].copy()
+    inter = inter.dissolve(by="glac_id").reset_index()
+
     if max_gap_years is not None:
-        inter = inter[inter["gap"] <= max_gap_years].copy()
-    inter = inter.drop(columns="gap")
- 
+        inter = inter[inter["best_gap"] <= max_gap_years].copy()
+
+    inter = inter.drop(columns=["gap", "best_gap"])
+
     # clip à l'emprise du patch
     inter["geometry"] = inter.geometry.intersection(patch_geom)
- 
+
     shapes = [
         (geom, 1)
         for geom in inter.geometry
         if geom is not None and not geom.is_empty
     ]
- 
+
     mask = rasterize(
         shapes=shapes,
         out_shape=(H, W),
@@ -389,7 +394,7 @@ def glims_mask_for_composite(tif_path, glims_gdf, max_gap_years=3):
         fill=0,
         dtype=np.uint8,
     )
- 
+
     return mask, year_img, inter
  
 def stretch(x):
@@ -399,38 +404,35 @@ def stretch(x):
 def get_glims_outlines_for_patch(tif_path, glims_gdf, max_gap_years=None):
     tif_path = Path(tif_path)
     year_img = int(re.search(r"_(\d{4})_(summer|topk)$", tif_path.stem).group(1))
- 
+
     da = rxr.open_rasterio(tif_path)
     img_crs = da.rio.crs
     patch_geom = box(*da.rio.bounds())
- 
+
     gl = glims_gdf.copy()
     if gl.crs is None:
         gl = gl.set_crs(4326)
- 
+
     gl["glac_id"] = gl["glac_id"].astype(str).str.strip()
     gl = gl.to_crs(img_crs)
- 
+
     inter = gl[gl.intersects(patch_geom)].copy()
- 
+
     if len(inter) == 0:
         return inter, year_img
- 
-    # Même logique que glims_mask_for_composite : outline le plus proche de
-    # l'année image, avec filtre max_gap_years — ce que le preview affiche
-    # correspond exactement à ce qui ira dans le masque.
+
     inter["gap"] = (inter["src_date_dt"].dt.year - year_img).abs()
-    inter = (
-        inter.sort_values(["glac_id", "gap", "src_date_dt"])
-             .drop_duplicates("glac_id", keep="first")
-    )
+    inter["best_gap"] = inter.groupby("glac_id")["gap"].transform("min")
+    inter = inter[inter["gap"] == inter["best_gap"]].copy()
+    inter = inter.dissolve(by="glac_id").reset_index()
+
     if max_gap_years is not None:
-        inter = inter[inter["gap"] <= max_gap_years].copy()
-    inter = inter.drop(columns="gap")
- 
+        inter = inter[inter["best_gap"] <= max_gap_years].copy()
+
+    inter = inter.drop(columns=["gap", "best_gap"])
     inter["geometry"] = inter.geometry.intersection(patch_geom)
     inter = inter[~inter.geometry.is_empty].copy()
- 
+
     return inter, year_img
  
 def show_tif_rgb_with_outline(tif_path, glims_gdf=None, max_gap_years=3, ax=None):
@@ -511,7 +513,81 @@ def save_composite_xarray(comp, out_path):
         BIGTIFF="IF_SAFER",
     )
     return out_path
- 
+
+def fetch_composite(
+    bbox,
+    start_date,
+    end_date,
+    out_path: Path,
+    bands=("blue", "green", "red", "nir"),
+    resolution=10,
+    max_cloud=60,
+    limit=15,
+    reducer="first",  # "median" or "first"
+):
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if out_path.exists():
+        return {"status": "skipped", "path": str(out_path)}
+
+    items = search_items(bbox, start_date, end_date, max_cloud=max_cloud, limit=limit)
+    if len(items) == 0:
+        return {"status": "no_items", "path": str(out_path)}
+
+    epsg = utm_epsg_from_bbox(bbox)
+    bounds = bbox_to_projected_bounds(bbox, epsg)
+
+    items = filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset=bands[0])
+    if len(items) == 0:
+        return {"status": "no_readable_items", "path": str(out_path)}
+
+    da = stackstac.stack(
+        items,
+        assets=list(bands),
+        epsg=epsg,
+        resolution=resolution,
+        bounds=bounds,
+    ).chunk({"time": 1, "x": 1024, "y": 1024})
+
+    if reducer == "median":
+        comp = da.median(dim="time", skipna=True)
+    else:
+        comp = da.isel(time=0)
+
+    comp = comp.assign_coords(band=list(bands))
+    comp.rio.write_crs(f"EPSG:{epsg}", inplace=True)
+
+    comp.rio.to_raster(
+        out_path,
+        compress="DEFLATE",
+        predictor=2,
+        tiled=True,
+        BIGTIFF="IF_SAFER",
+    )
+
+    return {"status": "ok", "path": str(out_path), "n_items": len(items), "epsg": epsg} 
+
+def filter_readable_items(items, bbox, epsg, bounds, resolution, test_asset="blue"):
+    good = []
+    for it in items:
+        try:
+            da = stackstac.stack(
+                [it],
+                assets=[test_asset],
+                epsg=epsg,
+                resolution=resolution,
+                bounds=bounds,
+            )
+            # force une mini lecture
+            _ = da.isel(time=0, band=0).data
+            # déclenche un petit compute
+            import dask.array as da_  # local import
+            da_.asarray(_)[0:10, 0:10].compute()
+            good.append(it)
+        except Exception:
+            continue
+    return good
  
 def fetch_composite_topk(
     bbox,

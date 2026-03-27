@@ -8,7 +8,7 @@ https://docs.python.org/3/reference/import.html#regular-packages
 """
 from .cnn_unet import *
 from .dataset import *
-from .lost_functions import *
+from .loss_functions import *
 from .training import *
 
 __all__ = [

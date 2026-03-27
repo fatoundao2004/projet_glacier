@@ -37,8 +37,11 @@ SCL_SNOW   = {11}           # snow/ice
 def load_patch_for_item(item, bbox, bands=("blue", "green", "red", "nir"), resolution=10):
     epsg = utm_epsg_from_bbox(bbox)
     bounds = bbox_to_projected_bounds(bbox, epsg)
-    da = stackstac.stack([item], assets=list(bands), epsg=epsg, resolution=resolution, bounds=bounds)
-    return da.isel(time=0).astype("float32").values  # (band,y,x)
+    try:
+        da = stackstac.stack([item], assets=list(bands), epsg=epsg, resolution=resolution, bounds=bounds)
+        return da.isel(time=0).astype("float32").values  # (band,y,x)
+    except Exception:
+        return None
 
 
 def load_scl_for_item(item, bbox, resolution=20):
@@ -52,8 +55,11 @@ def load_scl_for_item(item, bbox, resolution=20):
 
     epsg = utm_epsg_from_bbox(bbox)
     bounds = bbox_to_projected_bounds(bbox, epsg)
-    da = stackstac.stack([item], assets=[asset], epsg=epsg, resolution=resolution, bounds=bounds)
-    return da.isel(time=0, band=0).astype("int16").values  # (y,x)
+    try:
+        da = stackstac.stack([item], assets=[asset], epsg=epsg, resolution=resolution, bounds=bounds)
+        return da.isel(time=0, band=0).astype("int16").values  # (y,x)
+    except Exception:
+        return None
 
 
 def scl_fractions(scl):
@@ -113,6 +119,8 @@ def rank_dates_from_items(items, bbox, use_scl=True):
 
         if m is None:
             x = load_patch_for_item(it, bbox, bands=("blue","green","red","nir"), resolution=10)
+            if x is None:
+                continue
             m = proxy_quality_metrics(x)
 
         rows.append({
@@ -176,6 +184,12 @@ def show_topk_gallery(df, items, bbox, topk=8, scl_panel=True):
 
         # RGB (gauche)
         x_rgb = load_patch_for_item(it, bbox, bands=("red","green","blue"), resolution=10)
+        if x_rgb is None:
+            axes[i,0].text(0.5, 0.5, "Image corrompue", ha="center", va="center")
+            axes[i,0].axis("off")
+            if scl_panel:
+                axes[i,1].axis("off")
+            continue
         rgb, alpha = _rgb_from_patch(x_rgb)
         axes[i,0].imshow(rgb, alpha=alpha)
         axes[i,0].set_title(f"{dt.date()} | score={df.loc[i,'score']:.3f}")
@@ -341,7 +355,6 @@ def glacier_aware_score(m_glacier, m_ring=None, month=None):
 
     g_cloud  = clean(m_glacier, "cloud_frac")
     g_shadow = clean(m_glacier, "shadow_frac")
-    g_snow   = clean(m_glacier, "snow_frac")
     g_dark   = clean(m_glacier, "dark_frac")
     g_valid  = clean(m_glacier, "valid_frac")
 
@@ -351,20 +364,21 @@ def glacier_aware_score(m_glacier, m_ring=None, month=None):
 
     score = 0.0
 
-    # Priorité absolue: voir le glacier
+    # Priorité absolue : voir le glacier
     score += 4.0 * g_cloud
     score += 2.0 * g_shadow
     score += 1.0 * g_dark
 
-    # La neige SUR glacier n'est pas forcément rédhibitoire
-    score += 0.5 * g_snow
+    # g_snow : quelque chose qu'on avait avant mais retiré, le SCL classe le glacier lui-même comme neige/glace,
+    # c'est normal et ne devrait pas pénaliser le score.
 
-    # La neige AUTOUR du glacier est plus suspecte (neige saisonnière)
-    score += 1.2 * r_snow
+    # La neige AUTOUR du glacier reste un signal utile :
+    # si la couronne est enneigée, c'est de la neige saisonnière
+    score += 1.5 * r_snow
     score += 0.8 * r_cloud
     score += 0.4 * r_shadow
 
-    # Si peu de pixels valides sur le glacier, grosse pénalité
+    # Peu de pixels valides sur le glacier = grosse pénalité
     score += 3.0 * max(0.0, 1.0 - g_valid)
 
     return float(score)
@@ -392,6 +406,8 @@ def rank_dates_from_items_glacier(
         if scl is None:
             # fallback proxy si SCL absent
             x = load_patch_for_item(it, bbox, bands=("blue", "green", "red", "nir"), resolution=10)
+            if x is None:
+                continue   # ← skip cet item complètement
             m_proxy = proxy_quality_metrics(x)
 
             rows.append({

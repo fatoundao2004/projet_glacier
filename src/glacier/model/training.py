@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
  
-from glacier.model.lost_functions import iou_score
+from glacier.model.loss_functions import iou_score
  
  
 def train_one_epoch(
@@ -115,9 +115,18 @@ def show_predictions(
     device: torch.device,
     n: int = 4,
 ) -> None:
-    """Affiche n triplets (RGB, masque GLIMS, prédiction U-Net)."""
+    """
+    Affiche n quadruplets :
+    (RGB, masque GLIMS, prédiction U-Net, carte de différence).
+ 
+    Carte de différence :
+    - Vert  = vrai positif  (glacier bien prédit)
+    - Rouge = faux négatif  (glacier manqué par le modèle)
+    - Bleu  = faux positif  (prédit à tort comme glacier)
+    - Noir  = vrai négatif  (fond correctement ignoré)
+    """
     model.eval()
-    fig, axes = plt.subplots(n, 3, figsize=(10, 3.5 * n))
+    fig, axes = plt.subplots(n, 4, figsize=(14, 3.5 * n))
     if n == 1:
         axes = axes[np.newaxis]
  
@@ -129,6 +138,9 @@ def show_predictions(
             logits = model(img.unsqueeze(0).to(device))
             pred = (torch.sigmoid(logits) > 0.5).float().cpu()
  
+        m = mask[0].numpy()
+        p = pred[0, 0].numpy()
+ 
         # RGB pour affichage (bandes 2=R, 1=G, 0=B)
         rgb = img[[2, 1, 0]].numpy()
         for c in range(3):
@@ -137,15 +149,37 @@ def show_predictions(
                 lo, hi = np.percentile(valid, [2, 98])
                 rgb[c] = np.clip((rgb[c] - lo) / (hi - lo + 1e-6), 0, 1)
  
+        # Carte de différence (H, W, 3)
+        diff = np.zeros((*m.shape, 3), dtype=np.float32)
+        tp = (m == 1) & (p == 1)
+        fn = (m == 1) & (p == 0)
+        fp = (m == 0) & (p == 1)
+        diff[tp] = [0.0, 0.8, 0.0]   # vert
+        diff[fn] = [0.9, 0.0, 0.0]   # rouge
+        diff[fp] = [0.2, 0.4, 1.0]   # bleu
+ 
         axes[row, 0].imshow(rgb.transpose(1, 2, 0))
         axes[row, 0].set_title("Composite RGB")
-        axes[row, 1].imshow(mask[0].numpy(), cmap="gray", vmin=0, vmax=1)
+        axes[row, 1].imshow(m, cmap="gray", vmin=0, vmax=1)
         axes[row, 1].set_title("Masque GLIMS")
-        axes[row, 2].imshow(pred[0, 0].numpy(), cmap="gray", vmin=0, vmax=1)
+        axes[row, 2].imshow(p, cmap="gray", vmin=0, vmax=1)
         axes[row, 2].set_title("Prédiction U-Net")
+        axes[row, 3].imshow(diff)
+        axes[row, 3].set_title("Différence")
  
         for ax in axes[row]:
             ax.axis("off")
  
+    # Légende
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=(0.0, 0.8, 0.0), label="Vrai positif"),
+        Patch(facecolor=(0.9, 0.0, 0.0), label="Faux négatif"),
+        Patch(facecolor=(0.2, 0.4, 1.0), label="Faux positif"),
+    ]
+    fig.legend(handles=legend_elements, loc="lower center", ncol=3,
+               fontsize=9, frameon=False)
+ 
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.04)
     plt.show()

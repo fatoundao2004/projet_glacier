@@ -30,7 +30,15 @@ class GlacierDataset(Dataset):
         Active les augmentations spatiales aléatoires.
     pad_to : int
         Taille cible après zero-padding (doit être un multiple de 16).
+    add_ndsi : bool
+        Si True, ajoute le NDSI comme bande supplémentaire après normalisation.
+        Le NDSI est calculé AVANT normalisation : (Green - SWIR16) / (Green + SWIR16)
+        puis normalisé séparément. La sortie a alors n_bands + 1 canaux.
     """
+ 
+    # Indices des bandes dans le composite (B=0, G=1, R=2, NIR=3, SWIR16=4)
+    GREEN_IDX = 1
+    SWIR16_IDX = 4
  
     def __init__(
         self,
@@ -39,12 +47,14 @@ class GlacierDataset(Dataset):
         std: np.ndarray | None = None,
         augment: bool = False,
         pad_to: int = 320,
+        add_ndsi: bool = False,
     ):
         self.pairs = pairs
         self.mean = mean
         self.std = std
         self.augment = augment
         self.pad_to = pad_to
+        self.add_ndsi = add_ndsi
  
     def __len__(self):
         return len(self.pairs)
@@ -55,16 +65,29 @@ class GlacierDataset(Dataset):
         # ── Composite (5, H, W) float32 ──
         da = rxr.open_rasterio(tif_path)
         img = da.values.astype(np.float32)  # (C, H, W)
+        da.close()
         img = np.nan_to_num(img, nan=0.0)
+ 
+        # ── NDSI avant normalisation ──
+        if self.add_ndsi:
+            green = img[self.GREEN_IDX]
+            swir = img[self.SWIR16_IDX]
+            denom = green + swir
+            ndsi = np.where(denom > 0, (green - swir) / (denom + 1e-8), 0.0)
+            ndsi = ndsi.astype(np.float32)[np.newaxis]  # (1, H, W)
  
         # ── Masque (1, H, W) float32 dans [0, 1] ──
         mask = np.array(Image.open(mask_path), dtype=np.float32) / 255.0
         mask = mask[np.newaxis]  # (1, H, W)
  
-        # Normalisation par bande
+        # Normalisation par bande (sur les 5 bandes originales)
         if self.mean is not None and self.std is not None:
             for b in range(img.shape[0]):
                 img[b] = (img[b] - self.mean[b]) / (self.std[b] + 1e-8)
+ 
+        # Ajouter NDSI comme bande supplémentaire (déjà entre -1 et 1, pas besoin de normaliser)
+        if self.add_ndsi:
+            img = np.concatenate([img, ndsi], axis=0)  # (6, H, W)
  
         # Padding à pad_to × pad_to
         img = self._pad(img)
@@ -85,7 +108,7 @@ class GlacierDataset(Dataset):
         """Zero-pad puis crop centré → (C, pad_to, pad_to) garanti."""
         _, h, w = arr.shape
         t = self.pad_to
-
+ 
         # Pad si trop petit
         if h < t or w < t:
             ph = max(0, t - h)
@@ -96,13 +119,13 @@ class GlacierDataset(Dataset):
                 mode="constant",
             )
             _, h, w = arr.shape
-
+ 
         # Crop centré si trop grand
         if h > t or w > t:
             y0 = (h - t) // 2
             x0 = (w - t) // 2
             arr = arr[:, y0 : y0 + t, x0 : x0 + t]
-
+ 
         return arr
  
     @staticmethod
@@ -134,7 +157,9 @@ def compute_band_stats(
     counts = np.zeros(n_bands)
  
     for tif_path, _ in pairs:
-        arr = rxr.open_rasterio(tif_path).values.astype(np.float32)
+        da = rxr.open_rasterio(tif_path)
+        arr = da.values.astype(np.float32)
+        da.close()
         arr = np.nan_to_num(arr, nan=0.0)
         for b in range(n_bands):
             valid = arr[b] != 0
