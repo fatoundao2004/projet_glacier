@@ -130,7 +130,7 @@ class GlacierDataset(Dataset):
  
     @staticmethod
     def _augment(img, mask):
-        """Flips + rotations 90° appliqués identiquement à l'image et au masque."""
+        """Flips + rotations 90° + contraste/luminosité."""
         if torch.rand(1).item() > 0.5:
             img = torch.flip(img, [-1])
             mask = torch.flip(mask, [-1])
@@ -141,6 +141,14 @@ class GlacierDataset(Dataset):
         if k > 0:
             img = torch.rot90(img, k, [-2, -1])
             mask = torch.rot90(mask, k, [-2, -1])
+            
+        # Bruit gaussien (variabilité atmosphérique → contraste)
+        # ces transformations ne changent rien au masque
+        if torch.rand(1).item() > 0.5:
+            img = img + torch.randn_like(img) * 0.02
+        # Scaling par bande (conditions d'illumination → luminosité)
+        if torch.rand(1).item() > 0.5:
+            img = img * torch.empty(img.shape[0], 1, 1).uniform_(0.9, 1.1)
         return img, mask
  
  
