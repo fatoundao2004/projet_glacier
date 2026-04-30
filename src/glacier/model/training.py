@@ -18,11 +18,8 @@ def train_one_epoch(
     device: torch.device,
 ) -> tuple[float, float]:
     """
-    Entraîne le modèle pour une epoch complète.
- 
-    Returns
-    -------
-    (loss_moyenne, iou_moyen)
+    Exécute une itérarion complète pour le dataset d'entrainement
+    calcule la perte (Dice+BCE) et le score IoU
     """
     model.train()
     running_loss = 0.0
@@ -57,7 +54,7 @@ def evaluate(
 ) -> tuple[float, float]:
     """
     Évalue le modèle sur un DataLoader (validation ou test).
- 
+    Essentiel pour détecter le surapprentissage
     Returns
     -------
     (loss_moyenne, iou_moyen)

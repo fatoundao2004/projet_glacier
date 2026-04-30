@@ -137,6 +137,12 @@ def clean_glims_for_satellite(
     max_year: int = 2026,
     keep_regions=("alps", "caucasus", "andes"),
 ) -> gpd.GeoDataFrame:
+"""
+Prépare les polygones GLIMS pour l'alignement avec Sentinel-2:
+-filtrage des dates
+-suppression des polygones vides ou invalides
+-conversion vers EPSG:4326(WGS84)
+"""
     gdf = keep_outlines(gdf)
     gdf = drop_empty_geometries(gdf)
     gdf = ensure_wgs84(gdf)

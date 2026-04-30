@@ -5,7 +5,10 @@ import torch.nn as nn
  
  
 class DoubleConv(nn.Module):
-    """(Conv3×3 → BN → ReLU) × 2"""
+    """
+    Bloc de base (Conv3×3 → Batch Normalization → ReLU) × 2
+    Le padding = 1 permet de conserver la taille spatiale de l'image
+    """
  
     def __init__(self, in_ch: int, out_ch: int):
         super().__init__()
@@ -36,7 +39,7 @@ class Down(nn.Module):
 class AttentionGate(nn.Module):
     """
     Attention Gate (Oktay et al., 2018).
- 
+    
     Filtre les skip connections pour focaliser le décodeur sur les régions
     pertinentes. Le gate signal g (niveau inférieur, sémantiquement riche)
     guide l'attention sur le skip signal x (haute résolution, détails fins).

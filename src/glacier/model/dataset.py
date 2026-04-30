@@ -60,6 +60,12 @@ class GlacierDataset(Dataset):
         return len(self.pairs)
  
     def __getitem__(self, idx):
+        """
+        1- chargement avec rioxarray pour préserver les métadonnées géospatiales
+        2- normalisation (z-score) basée sur les stats du jeu d'entraînement
+        3- calcul optionnel du NDSI (Green - SWIR) / (Green+SWIR)
+        4- augmentation spatiale(flip/rotation) synchronisée entre image et masque
+        """
         tif_path, mask_path = self.pairs[idx]
  
         # ── Composite (5, H, W) float32 ──
